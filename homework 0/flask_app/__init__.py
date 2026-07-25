@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 # Create the SocketIO instance here at module level.
 # Both this file and socket_events.py need to reference the same instance,
 # so it lives here where both can import it.
-socketio = SocketIO()
+socketio = SocketIO(async_mode="threading")
 
 
 def create_app():
