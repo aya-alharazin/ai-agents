@@ -20,7 +20,7 @@ HOW EVENTS WORK:
 
 from flask_socketio import emit
 from flask_app import socketio
-from flask_app.utils.llm import send_message
+from flask_app.utils.llm import handle_ai_chat_request
 from flask import current_app
 
 
@@ -50,18 +50,14 @@ def handle_message(data):
     if not user_message:
         return
 
-    # Build the system prompt that tells the AI about the student's resume.
-    # This is what makes it a "resume reviewer" rather than a generic chatbot.
-    system_prompt = build_resume_system_prompt(db)
-
-    # Send the message to OpenRouter and get the AI's reply.
+    # Send the message to the Orchestrator and get the AI's reply.
     # If anything goes wrong (bad key, no internet, API error), we catch the
     # exception and emit a helpful error message instead of hanging silently.
     try:
-        ai_response = send_message(user_message, system_prompt)
+        ai_response = handle_ai_chat_request(db, role="Orchestrator", message=user_message)
     except Exception as error:
         print(f"LLM error: {error}")
-        ai_response = f"⚠️ Could not reach the AI: {error}"
+        ai_response = "Sorry, something went wrong answering that."
 
     # Emit the reply back — the browser's socket.on('receive_message') picks this up
     emit('receive_message', {'response': ai_response})
