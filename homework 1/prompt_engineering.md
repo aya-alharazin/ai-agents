@@ -6,32 +6,42 @@ Use this file to explain 3 different prompt engineering concepts that you tried 
 
 ### 1. Few-shot prompting (Database Read Expert)
 
-**What I tested:** The Database Read Expert's `llm_roles` config includes one example (`few_shot_examples`) showing a question paired with the exact SQL style expected:
+**What it is:** Giving the model one or more worked examples of the exact input→output pattern expected, so it imitates that pattern rather than guessing the format on its own.
+
+**What I tested:** The Database Read Expert's `llm_roles` config includes one example (`few_shot_examples`):
 > Q: How long did they work at MSU? -> SELECT p.start_date, p.end_date FROM positions p JOIN institutions i ON p.inst_id = i.inst_id WHERE i.name = 'MSU';
 
-I asked "How long did they work at Islamic University of Gaza?" with this example in place, then temporarily deleted the example (making the same prompt zero-shot) and asked the exact same question again, keeping everything else (instructions, schema context) unchanged.
-
-**Result with the example (few-shot):**
+With this example in place, I asked "How long did they work at Islamic University of Gaza?" and got:
 ```sql
 SELECT p.start_date, p.end_date FROM positions p JOIN institutions i ON p.inst_id = i.inst_id WHERE i.name = 'Islamic University of Gaza';
 ```
 Chat reply: accurate — correctly stated the start date and that the position is ongoing.
 
-**Result without the example (zero-shot):**
+**Effectiveness:** The example did more than control formatting — it demonstrated a *query strategy*: return the raw `start_date`/`end_date` fields and let a later step turn them into a human sentence, rather than trying to compute anything derived inside the SQL itself. The model followed that exact strategy for a completely different institution name, proving the example generalized rather than being copied verbatim.
+
+---
+
+### 2. Zero-shot prompting (Database Read Expert)
+
+**What it is:** Giving the model only instructions and context, with no worked example to imitate — it has to infer the expected format and approach entirely on its own.
+
+**What I tested:** I temporarily deleted the same few-shot example from the Read Expert's config (making its prompt zero-shot), keeping the instructions and schema context unchanged, and asked the exact same question: "How long did they work at Islamic University of Gaza?"
+
+**Result:**
 ```sql
 SELECT STRFTIME('%Y-%m-%d', end_date) - STRFTIME('%Y-%m-%d', start_date) AS duration FROM positions WHERE inst_id = (SELECT inst_id FROM institutions WHERE name = 'Islamic University of Gaza');
 ```
 Chat reply: "The duration of their work at Islamic University of Gaza is not available."
 
-**Effectiveness:** The example wasn't just controlling output *formatting* — it was implicitly teaching a *query strategy*. With no example, the model tried to compute the duration itself inside SQL, using a subtraction operator on two date strings, which isn't valid date arithmetic in SQLite. It didn't error, it just silently produced a useless result, and the final answer degraded from a correct date to "not available." One well-chosen example prevented an entire category of subtly-wrong query design, not just cosmetic differences.
+**Effectiveness:** Without an example, the model still followed the instructions (it produced one valid-looking `SELECT` statement, respecting "SQL only, no markdown"), but it invented its own query strategy — trying to compute the duration directly in SQL using a subtraction operator on two date strings, which is not valid date arithmetic in SQLite. This didn't raise an error; it just silently returned a useless result, so the final answer degraded from a correct date to "not available." This is the clearest illustration in this project of zero-shot's main weakness: the model can follow explicit instructions correctly while still making a reasonable-looking but wrong assumption about *how* to solve the task, when it has no example to anchor to.
 
 ---
 
-### 2. Task decomposition / orchestration prompting
+### 3. Orchestrator prompting (task decomposition)
 
-**What it is:** Instead of one prompt trying to handle an entire request end-to-end, the request is first sent to an "Orchestrator" prompt whose *only* job is to break it into an ordered list of smaller sub-tasks, naming which specialized expert should handle each one. Each sub-task is then run through its own separately-prompted expert, and a final prompt merges all the results into one reply. This is different from few-shot or output-constraining (Concept 1) — those change *how* a single prompt behaves, while this changes *whether one prompt should be doing the whole job at all*.
+**What it is:** Instead of one prompt trying to handle an entire request end-to-end, the request is first given to an "Orchestrator" prompt whose only job is to break it into an ordered list of smaller sub-tasks and name which specialized expert should handle each one. Each sub-task then runs through its own separately-prompted expert, and a final prompt merges all the results into one reply.
 
-**How it's applied in this project:** Every chat message goes through `handle_ai_chat_request(db, role="Orchestrator", message=...)` first. I tested it directly with a compound request: "Does he know Dart? If not, add it to Programming Labs experience." The console showed the Orchestrator correctly splitting this into two ordered steps and running them in sequence:
+**How it's applied in this project:** Every chat message goes through `handle_ai_chat_request(db, role="Orchestrator", message=...)` first. I tested it with a compound request: "Does he know Dart? If not, add it to Programming Labs experience." The console showed the Orchestrator correctly splitting this into two ordered steps and running them in sequence:
 
 ```
 [Orchestrator] generated:
