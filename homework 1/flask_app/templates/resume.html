@@ -172,6 +172,12 @@ async function refreshResumeContent() {
   if (newContent) document.querySelector('.resume-content').innerHTML = newContent.innerHTML;
 }
 
+  socket.on('receive_message', function(data) {
+    removeTypingIndicator();
+    displayMessage('AI', data.response);
+    refreshResumeContent();
+  });
+
   // ----------------------------------------------------------------
   // SENDING A MESSAGE
   // Called when the user clicks Send or presses Enter.
