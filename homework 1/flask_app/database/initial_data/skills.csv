@@ -1,0 +1,26 @@
+"skill_id","experience_id","name","skill_level"
+"1","1","Python","9"
+"2","1","Problem Solving","9"
+"3","1","Teaching","9"
+"4","1","Git","7"
+
+"5","2","Python","9"
+"6","2","Algorithms","8"
+"7","2","Communication","9"
+
+"8","3","Excel","10"
+"9","3","Power BI","8"
+"10","3","SQL","8"
+"11","3","Data Analysis","9"
+
+"12","4","Power BI","8"
+"13","4","Excel","10"
+"14","4","Data Visualization","8"
+
+"15","5","Data Entry","10"
+"16","5","Microsoft Excel","10"
+"17","5","Attention to Detail","10"
+
+"18","6","Google Sheets","9"
+"19","6","Data Validation","9"
+"20","6","Reporting","8"
