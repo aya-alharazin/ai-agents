@@ -13,5 +13,6 @@ CREATE TABLE IF NOT EXISTS positions (
     responsibilities TEXT    NOT NULL,   -- brief description of the role
     start_date       TEXT    NOT NULL,   -- stored as 'YYYY-MM-DD'
     end_date         TEXT,               -- NULL means the position is current
+    embedding        TEXT DEFAULT NULL,  -- JSON-encoded vector, for semantic search
     FOREIGN KEY (inst_id) REFERENCES institutions(inst_id)
 );

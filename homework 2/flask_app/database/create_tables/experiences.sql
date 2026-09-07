@@ -13,5 +13,6 @@ CREATE TABLE IF NOT EXISTS experiences (
     hyperlink      TEXT,               -- URL to project, paper, or repo (optional)
     start_date     TEXT,               -- stored as 'YYYY-MM-DD' (optional)
     end_date       TEXT,               -- NULL means ongoing (optional)
+    embedding      TEXT DEFAULT NULL,  -- JSON-encoded vector, for semantic search
     FOREIGN KEY (position_id) REFERENCES positions(position_id)
 );

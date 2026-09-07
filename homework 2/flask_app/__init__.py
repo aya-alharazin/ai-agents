@@ -52,6 +52,7 @@ def create_app():
     db = database()
     print("Setting up database...")
     db.createTables(purge=True)
+    db.backfillEmbeddings()   # Homework 2: embed any CSV-seeded row that doesn't have one yet
     print("Database ready.")
     app.db = db
     # Connect Socket.IO to the Flask app

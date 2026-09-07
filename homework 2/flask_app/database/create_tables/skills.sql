@@ -10,5 +10,6 @@ CREATE TABLE IF NOT EXISTS skills (
     experience_id  INTEGER,             -- which experience used this skill (optional)
     name           TEXT    NOT NULL,    -- e.g. 'Python', 'JavaScript'
     skill_level    INTEGER NOT NULL,    -- 1 (beginner) to 10 (expert)
+    embedding      TEXT DEFAULT NULL,   -- JSON-encoded vector, for semantic search
     FOREIGN KEY (experience_id) REFERENCES experiences(experience_id)
 );

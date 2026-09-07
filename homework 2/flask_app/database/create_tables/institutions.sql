@@ -14,5 +14,6 @@ CREATE TABLE IF NOT EXISTS institutions (
     address     TEXT,
     city        TEXT,
     state       TEXT,
-    zip         TEXT
+    zip         TEXT,
+    embedding   TEXT DEFAULT NULL  -- JSON-encoded vector, for semantic search
 );

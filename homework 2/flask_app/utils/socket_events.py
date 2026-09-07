@@ -18,11 +18,25 @@ HOW EVENTS WORK:
   but for WebSocket events instead of HTTP requests.
 """
 
+from flask import current_app, session
 from flask_socketio import emit
 from flask_app import socketio
-from flask_app.utils.llm import handle_ai_chat_request
-from flask import current_app
+from flask_app.utils.llm import (
+    handle_ai_chat_request,
+    assess_message_risk,
+    request_human_validation,
+    handle_validation_response,
+)
 
+# db is attached to the Flask app instance by create_app() in __init__.py
+# (app.db = db). Flask-SocketIO runs event handlers inside an app context,
+# so current_app.db reaches that same shared instance here too -- no
+# separate module-level variable needed.
+#
+# `session` (Homework 2) works here the same way: Flask-SocketIO ties its
+# event handlers to the same signed session cookie the page's HTTP requests
+# use, so state stashed here in one message (see request_human_validation
+# in llm.py) is still there on the next.
 
 
 @socketio.on('send_message')
@@ -30,66 +44,30 @@ def handle_message(data):
     """
     Called automatically when the browser emits a 'send_message' event.
 
-    Args:
-        data (dict): Contains 'message' — the text the student typed.
-
-    Flow:
+    Flow (Homework 2 adds a gate before step 3):
         1. Extract the user's message from the event data
-        2. Build a system prompt from the student's resume (from the database)
-        3. Send both to the AI via llm.py
-        4. Emit the AI's reply back to the browser as 'receive_message'
-
-    # NOTE: 'emit' sends a named event back to the browser.
-    #       The browser is listening for 'receive_message' — see resume.html.
-    # QUESTION: Right now, every connected user receives every message.
-    #           How would you send a reply only to the user who asked?
-    #           Hint: look up 'rooms' in the Flask-SocketIO documentation.
+        2. Is a validation question already pending from the last message?
+             YES -> handle_validation_response() answers it
+             NO, but does THIS message look destructive?
+               YES -> request_human_validation() pauses and asks, stop here
+               NO  -> proceed to the Orchestrator as normal
+        3. Emit the AI's reply back to the browser as 'receive_message'
     """
     user_message = data.get('message', '').strip()
-    db = current_app.db
+
     if not user_message:
         return
 
-    # Send the message to the Orchestrator and get the AI's reply.
-    # If anything goes wrong (bad key, no internet, API error), we catch the
-    # exception and emit a helpful error message instead of hanging silently.
     try:
-        ai_response = handle_ai_chat_request(db, role="Orchestrator", message=user_message)
+        db = current_app.db
+        if session.get('pending_validation'):
+            ai_response = handle_validation_response(db, user_message)
+        elif assess_message_risk(user_message):
+            ai_response = request_human_validation(user_message)
+        else:
+            ai_response = handle_ai_chat_request(db, role="Orchestrator", message=user_message)
     except Exception as error:
         print(f"LLM error: {error}")
         ai_response = "Sorry, something went wrong answering that."
 
-    # Emit the reply back — the browser's socket.on('receive_message') picks this up
     emit('receive_message', {'response': ai_response})
-
-
-def build_resume_system_prompt(db):
-    """
-    Build the system prompt that gives the AI context about the resume.
-
-    We pull the resume text directly from the database so the AI always
-    has accurate, up-to-date information — no HTML scraping needed.
-
-    Args:
-        db: The database instance (set by create_app).
-
-    Returns:
-        str: A system prompt containing the AI's instructions + resume data.
-
-    # QUESTION: What would you change in the instructions below to make
-    #           the AI respond differently? Try changing the tone or focus.
-    # QUESTION: What other information could you add to help the AI give
-    #           better answers? (hobbies? goals? target job?)
-    """
-    resume_text = db.getResumeText()
-
-    return f"""You are a helpful AI assistant reviewing a resume.
-You have been given the resume content below. Use it to answer questions
-accurately and helpfully. If asked something not covered in the resume,
-say so honestly rather than guessing.
-Keep answers concise. You may use light markdown (bold, bullet lists) but
-avoid large tables.
-
-RESUME CONTENT:
-{resume_text}
-"""

@@ -19,7 +19,11 @@ HOW THE DATA IS ORGANIZED:
 import sqlite3
 import csv
 import os
+import json
+import math
 from io import StringIO
+
+from flask_app.utils.embeddings import generate_embedding
 
 # Path to the SQLite database file — created automatically on first run
 DB_PATH = 'flask_app/database/resume.db'
@@ -27,6 +31,21 @@ DB_PATH = 'flask_app/database/resume.db'
 # Tables must be created in this order because of foreign key relationships.
 # For example, 'positions' references 'institutions', so institutions must exist first.
 TABLE_ORDER = ['institutions', 'positions', 'experiences', 'skills','llm_roles']
+
+# Which columns get combined into the text that gets embedded for each
+# table, and each table's primary key column.
+EMBEDDING_FIELDS = {
+    'institutions': ['name', 'department'],
+    'positions':    ['title', 'responsibilities'],
+    'experiences':  ['name', 'description'],
+    'skills':       ['name'],
+}
+ID_COLUMNS = {
+    'institutions': 'inst_id',
+    'positions':    'position_id',
+    'experiences':  'experience_id',
+    'skills':       'skill_id',
+}
 
 
 class database:
@@ -71,21 +90,23 @@ class database:
         """
         # Connect to the database file (creates it if it doesn't exist)
         connection = sqlite3.connect(self.db_path)
-        connection.execute("PRAGMA foreign_keys = ON")
-        # row_factory lets us access columns by name: row['title']
-        # instead of by index: row[0]
-        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            # row_factory lets us access columns by name: row['title']
+            # instead of by index: row[0]
+            connection.row_factory = sqlite3.Row
 
-        cursor = connection.cursor()
-        cursor.execute(sql, params)
+            cursor = connection.cursor()
+            cursor.execute(sql, params)
 
-        # Only fetch rows for queries that return data
-        results = []
-        if sql.strip().upper().startswith(('SELECT', 'PRAGMA')):
-            results = [dict(row) for row in cursor.fetchall()]
+            # Only fetch rows for queries that return data
+            results = []
+            if sql.strip().upper().startswith(('SELECT', 'PRAGMA')):
+                results = [dict(row) for row in cursor.fetchall()]
 
-        connection.commit()
-        connection.close()
+            connection.commit()
+        finally:
+            connection.close()
         return results
 
     # ------------------------------------------------------------------
@@ -248,6 +269,11 @@ class database:
         Database Write Expert's generated code can resolve a foreign key by
         name instead of needing to know the numeric ID, e.g.
             "(SELECT experience_id FROM experiences WHERE name = 'MSU Research')"
+
+        Homework 2: if `table` is one of EMBEDDING_FIELDS, the new row's
+        embedding is generated and stored right after the insert -- this
+        needs the new row's ID (self.query() doesn't return one), so this
+        method opens its own connection instead of calling self.query().
         """
         value_sql, bound_params = [], []
         for value in values:
@@ -257,7 +283,113 @@ class database:
                 value_sql.append("?")
                 bound_params.append(value)
         sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(value_sql)})"
-        self.query(sql, tuple(bound_params))
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            cursor = connection.cursor()
+            cursor.execute(sql, tuple(bound_params))
+            new_row_id = cursor.lastrowid
+            connection.commit()
+        finally:
+            connection.close()
+
+        if table in EMBEDDING_FIELDS:
+            self._updateEmbedding(table, new_row_id)
+
+
+    def _updateEmbedding(self, table, row_id):
+        """
+        Regenerate and store the embedding for one row, combining that
+        table's EMBEDDING_FIELDS columns into a single string first (e.g.
+        an institution's name + department). Stored as JSON text since
+        SQLite has no native vector/array column type.
+        """
+        id_column = ID_COLUMNS[table]
+        rows = self.query(f"SELECT * FROM {table} WHERE {id_column} = ?", (row_id,))
+        if not rows:
+            return
+
+        row = rows[0]
+        text = " ".join(str(row[field]) for field in EMBEDDING_FIELDS[table] if row.get(field))
+        embedding = generate_embedding(text)
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                f"UPDATE {table} SET embedding = ? WHERE {id_column} = ?",
+                (json.dumps(embedding), row_id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+
+    def backfillEmbeddings(self):
+        """
+        Generate embeddings for any row that doesn't have one yet.
+
+        insertRows() embeds new rows automatically, but the CSV-seeded
+        starting data (loaded by _seed_table on every startup) never goes
+        through insertRows -- so this fills in the gap. Safe to call every
+        startup: a row with embedding IS NOT NULL is already done and gets
+        skipped, so re-running this after the first startup is a no-op.
+        """
+        for table in EMBEDDING_FIELDS:
+            id_column = ID_COLUMNS[table]
+            rows = self.query(f"SELECT {id_column} FROM {table} WHERE embedding IS NULL")
+            for row in rows:
+                self._updateEmbedding(table, row[id_column])
+            if rows:
+                print(f"  Generated embeddings for {len(rows)} {table} row(s)")
+
+
+    def semanticSearch(self, table, query_text, top_k=3):
+        """
+        Return the top_k rows in `table` whose embedding is closest in
+        MEANING to query_text, ranked by cosine similarity -- e.g.
+        searching institutions for "MSU" finds the row named "Michigan
+        State University" even though the strings don't match at all.
+
+        For 'institutions', each result also gets its `positions` attached
+        (title/responsibilities/start_date/end_date) via a normal SQL join
+        -- this is what lets a single Semantic Search Expert call answer
+        "how long did they work at MSU?"-style questions without a second
+        AI call.
+        """
+        id_column = ID_COLUMNS[table]
+        query_embedding = generate_embedding(query_text)
+
+        rows = self.query(f"SELECT * FROM {table} WHERE embedding IS NOT NULL")
+        scored = [(self._cosineSimilarity(query_embedding, json.loads(row['embedding'])), row) for row in rows]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+
+        results = []
+        for similarity, row in scored[:top_k]:
+            visible = {key: value for key, value in row.items() if key != 'embedding'}
+            visible['similarity'] = round(similarity, 3)
+            if table == 'institutions':
+                visible['positions'] = self.query(
+                    "SELECT title, responsibilities, start_date, end_date FROM positions WHERE inst_id = ?",
+                    (row['inst_id'],),
+                )
+            results.append(visible)
+        return results
+
+
+    def _cosineSimilarity(self, vector_a, vector_b):
+        """
+        Return how similar two embedding vectors are, from -1 (opposite
+        meaning) to 1 (identical meaning). The dot product measures how much
+        the two vectors point in the same direction, normalized by their
+        lengths so longer text doesn't automatically score higher.
+        """
+        dot_product = sum(a * b for a, b in zip(vector_a, vector_b))
+        magnitude_a = math.sqrt(sum(a * a for a in vector_a))
+        magnitude_b = math.sqrt(sum(b * b for b in vector_b))
+        if magnitude_a == 0 or magnitude_b == 0:
+            return 0.0
+        return dot_product / (magnitude_a * magnitude_b)
 
 
 
