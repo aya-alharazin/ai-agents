@@ -118,6 +118,7 @@ def execute_write_action(db, generated_code):
 
 
 def run_orchestrator_plan(db, original_request, plan_text):
+    plan_text = re.sub(r'^```(?:python)?\s*|\s*```$', '', plan_text.strip())
     try:
         call_strings = eval(plan_text)
     except Exception:
