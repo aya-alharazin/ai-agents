@@ -1,0 +1,4 @@
+"inst_id","type","name","department","address","city","state","zip"
+"1","Academia","Islamic University of Gaza","Computer Science",NULL,"Gaza",NULL,NULL
+"2","Non-Profit","Ard El Insan Palestine","MEAL Department",NULL,"Gaza",NULL,NULL
+"3","Non-Profit","Women's Affairs Centre (WAC)","Information Management",NULL,"Gaza",NULL,NULL
